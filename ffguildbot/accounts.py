@@ -5,12 +5,15 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import ffapi
 
 from .device import FlowError
-from .vision import tap_if, wait_for, exists, read_int
+from .vision import TPL_DIR, tap_if, wait_for, exists, find, read_int
 from .flow_match import run_match
 
 LEDGER = Path("state/accounts.jsonl")
 POOL = Path("state/pool.jsonl")
 LEDGER.parent.mkdir(parents=True, exist_ok=True)
+
+WARM_RANKS = ("rank_gold", "rank_platinum", "rank_diamond",
+              "rank_heroic", "rank_grandmaster")
 
 
 class Account:
@@ -27,6 +30,10 @@ class Account:
 def _record(acct, note=""):
     with LEDGER.open("a") as f:
         f.write(json.dumps({**acct.to_dict(), "note": note}) + "\n")
+
+
+def _has_tpl(name):
+    return os.path.exists(os.path.join(TPL_DIR, name + ".png"))
 
 
 def pool_count():
@@ -46,7 +53,6 @@ def pool_take():
 
 
 def pool_fill(region, target):
-    """Blocking top-up used by scripts/warm.py."""
     while pool_count() < target:
         raw = ffapi.api_generate(region=region)
         if not raw:
@@ -97,6 +103,14 @@ class ApiProvider:
         except Exception:
             return None
 
+    def has_warm_rank(self, dev):
+        try:
+            screen = dev.shot()
+        except FlowError:
+            return False
+        return any(find(screen, t, conf=0.78)
+                   for t in WARM_RANKS if _has_tpl(t))
+
 
 def ensure_account(dev, provider, region, min_level, cfg, log=print):
     acct = provider.create(dev, region)
@@ -117,6 +131,16 @@ def ensure_account(dev, provider, region, min_level, cfg, log=print):
     if acct.level < min_level:
         _record(acct, f"under-levelled:{acct.level}")
         raise FlowError(f"level {acct.level} < {min_level}")
+
+    if cfg["accounts"].get("warm_rank") and not provider.has_warm_rank(dev):
+        cap = cfg["accounts"]["rank_warm_max_matches"]
+        for i in range(cap):
+            run_match(dev, cfg)
+            if provider.has_warm_rank(dev):
+                log(f"rank warm reached after {i + 1} matches")
+                break
+        else:
+            log("rank warm cap hit, continuing anyway")
 
     _record(acct, "ready")
     return acct
