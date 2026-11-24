@@ -13,7 +13,7 @@ session:
   max_matches_per_bot: 40
 
 accounts:
-  warmup_max_matches: 4
+  warmup_max_matches: 6
   warm_rank: false
   rank_warm_max_matches: 30
   pool_low_water: 25
