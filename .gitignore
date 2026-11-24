@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+.env
+runner.env
+state/
+LATENCY_ZERO/
+grid.png
+debug.log
+accounts_*/
+.venv/
