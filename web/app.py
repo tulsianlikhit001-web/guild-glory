@@ -102,8 +102,12 @@ def index():
             beat = f'<span class="pill"><span class="dot"></span>runner {age}s ago</span>'
         else:
             beat = f'<span class="pill"><span class="dot warn"></span>stale {age // 60}m</span>'
-        free = hb.get("free")
-        devs = f' &nbsp;·&nbsp; {free}/{hb["devices"]} devices free' if devs_ok(hb) else ""
+        devs = ""
+        if hb.get("devices") is not None:
+            devs = f' &nbsp;·&nbsp; {hb.get("free", 0)}/{hb["devices"]} devices free'
+        tpl = ""
+        if hb.get("missing_templates"):
+            tpl = f' &nbsp;·&nbsp; {hb["missing_templates"]} templates missing'
         body = f"""
 <h1>FF Guild Glory Bot</h1>
 <p class="sub">Queue a guild join, the phone box does the rest.</p>
@@ -129,7 +133,7 @@ def index():
 </div>
 <p class="note"><b>Before launching:</b> set the guild to open-join, min level
 {MIN_LEVEL} or lower, and leave at least {MAX_BOTS} free slots.</p>
-<div class="bar"><span>{beat}</span><span>queued: {q}</span>{devs}</div>
+<div class="bar"><span>{beat}</span><span>queued: {q}</span>{devs}{tpl}</div>
 <script>
 const a = document.getElementById("admin");
 a.value = localStorage.getItem("ff_admin") || "";
@@ -142,10 +146,6 @@ document.querySelector("form").addEventListener("submit",
             f'<h1>FF Guild Glory Bot</h1>'
             f'<p class="err">{type(e).__name__}: {e}</p>'
             f'<p><a href="/diag">open /diag</a></p>', status=503)
-
-
-def devs_ok(hb):
-    return hb.get("devices") is not None and hb.get("free") is not None
 
 
 @app.post("/launch")
@@ -182,3 +182,50 @@ def job_page(job_id: str):
 <h2>Results</h2><ul>{res}</ul>
 <p class="meta" style="margin-top:24px"><a href="/">new job</a></p>"""
     return _html(body, refresh=8 if live else None)
+
+
+@app.get("/api/next-job")
+def next_job(x_runner_token: str = Header(...)):
+    _runner(x_runner_token)
+    head = store.pop(Q)
+    if not head:
+        return {"job": None}
+    job = store.get_json(f"job:{head['id']}")
+    if job:
+        job["status"] = "running"
+        store.set_json(f"job:{job['id']}", job, ttl=86400)
+    return {"job": job}
+
+
+@app.post("/api/job/{job_id}/log")
+async def job_log(job_id: str, request: Request,
+                  x_runner_token: str = Header(...)):
+    _runner(x_runner_token)
+    line = (await request.json()).get("line", "")[:300]
+    j = store.get_json(f"job:{job_id}")
+    if j:
+        j.setdefault("log", []).append(line)
+        j["log"] = j["log"][-200:]
+        store.set_json(f"job:{job_id}", j, ttl=86400)
+    return {"ok": True}
+
+
+@app.post("/api/job/{job_id}/result")
+async def job_result(job_id: str, request: Request,
+                     x_runner_token: str = Header(...)):
+    _runner(x_runner_token)
+    body = await request.json()
+    j = store.get_json(f"job:{job_id}")
+    if j:
+        j.setdefault("results", []).append(body)
+        j["status"] = "done" if len(j["results"]) >= j["bots"] else "running"
+        store.set_json(f"job:{job_id}", j, ttl=86400)
+    return {"ok": True}
+
+
+@app.post("/api/heartbeat")
+async def heartbeat(request: Request, x_runner_token: str = Header(...)):
+    _runner(x_runner_token)
+    body = await request.json()
+    store.set_json("runner:heartbeat", {"t": time.time(), **body}, ttl=180)
+    return {"ok": True}
