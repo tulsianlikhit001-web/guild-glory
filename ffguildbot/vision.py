@@ -5,6 +5,7 @@ import pytesseract
 TPL_DIR = os.path.join(os.path.dirname(__file__), "templates")
 _cache = {}
 _missing = set()
+
 REQUIRED = [
     "btn_login_guest", "btn_guest_recover", "field_guest_uid", "btn_guest_next",
     "field_guest_pw", "btn_guest_confirm", "hud_lobby_ready",
@@ -14,6 +15,7 @@ REQUIRED = [
     "btn_mode_br", "btn_start_match", "hud_land_button", "btn_result_ok",
     "hud_spectate", "hud_dead", "warn_outside_zone", "warn_enemy_near",
 ]
+
 
 def _load(name):
     if name in _missing:
@@ -35,6 +37,11 @@ def _load(name):
 
 def missing():
     return sorted(_missing)
+
+
+def missing_required():
+    return [n for n in REQUIRED
+            if not os.path.exists(os.path.join(TPL_DIR, n + ".png"))]
 
 
 def find(screen, name, conf=0.82, region=None):
@@ -92,6 +99,3 @@ def read_int(screen, region, whitelist="0123456789"):
         crop, config=f"--psm 7 -c tessedit_char_whitelist={whitelist}")
     digits = "".join(c for c in txt if c.isdigit())
     return int(digits) if digits else None
-def missing_required():
-    return [n for n in REQUIRED
-            if not os.path.exists(os.path.join(TPL_DIR, n + ".png"))]
