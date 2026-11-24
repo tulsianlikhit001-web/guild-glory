@@ -9,6 +9,7 @@ from ffguildbot.accounts import ApiProvider, ensure_account, pool_count, pool_fi
 from ffguildbot.device import Device, FlowError
 from ffguildbot.flow_join import join_guild, wait_approved, leave_guild
 from ffguildbot.flow_match import run_match
+from ffguildbot import vision
 
 CTRL = os.environ["CONTROL_URL"].rstrip("/")
 TOK = os.environ["RUNNER_TOKEN"]
@@ -16,19 +17,24 @@ HDR = {"X-Runner-Token": TOK}
 SERIALS = [s.strip() for s in os.environ["ADB_SERIALS"].split(",") if s.strip()]
 REGION = os.environ.get("FF_REGION", "IND")
 MIN_LEVEL = int(os.environ.get("BOT_MIN_LEVEL", 2))
+NO_LEAVE = os.environ.get("FF_NO_LEAVE") == "1"
 
 CFG = yaml.safe_load(open(os.path.join(ROOT, "config.yaml")))
 CFG["guild"]["require_level"] = MIN_LEVEL
 LOCKS = {s: threading.Lock() for s in SERIALS}
+RUNNING = threading.Event()
+RUNNING.set()
 
 
 def log(job_id, line):
     print(line, flush=True)
-    try:
-        requests.post(f"{CTRL}/api/job/{job_id}/log", headers=HDR,
-                      json={"line": line}, timeout=10)
-    except requests.RequestException:
-        pass
+    for _ in range(2):
+        try:
+            requests.post(f"{CTRL}/api/job/{job_id}/log", headers=HDR,
+                          json={"line": line}, timeout=10)
+            return
+        except requests.RequestException:
+            time.sleep(1)
 
 
 def free_devices():
@@ -36,24 +42,37 @@ def free_devices():
 
 
 def heartbeat():
-    while True:
+    while RUNNING.is_set():
         try:
             requests.post(f"{CTRL}/api/heartbeat", headers=HDR,
                           json={"devices": len(SERIALS),
-                                "free": len(free_devices())}, timeout=10)
+                                "free": len(free_devices()),
+                                "missing_templates": len(vision.missing())},
+                          timeout=10)
         except requests.RequestException:
             pass
         time.sleep(120)
 
 
 def warmer():
+    if os.environ.get("FF_NO_WARMER") == "1":
+        return
     target = CFG["accounts"]["pool_target"]
-    while True:
-        if pool_count() < CFG["accounts"]["pool_low_water"]:
-            try:
+    low = CFG["accounts"]["pool_low_water"]
+    fails = 0
+    while RUNNING.is_set():
+        try:
+            if pool_count() < low:
                 pool_fill(REGION, target)
-            except Exception as e:
-                print(f"warmer error {e}", flush=True)
+                fails = 0
+        except Exception as e:
+            fails += 1
+            print(f"warmer error {e}", flush=True)
+            if fails > 20:
+                print("warmer backing off 10m", flush=True)
+                time.sleep(600)
+                fails = 0
+                continue
         time.sleep(120)
 
 
@@ -68,13 +87,13 @@ def run_bot(job, serial):
                            lambda m: log(job["id"], f"{serial}: {m}"))
 
             state = join_guild(dev, job["guild"], CFG)
+            log(job["id"], f"{serial}: join state {state}")
             if state == "pending":
-                log(job["id"], f"{serial}: pending approval")
                 state = wait_approved(dev, CFG, job["guild"])
-            if state not in ("joined", "already"):
-                raise FlowError("join failed — check guild min level is "
-                                f"{MIN_LEVEL} or lower, join is open, "
-                                "and slots are free")
+                if state != "joined":
+                    log(job["id"], f"{serial}: approval timed out, playing anyway")
+            if state not in ("joined", "already", "pending"):
+                raise FlowError("join failed")
 
             cap = CFG["session"]["max_matches_per_bot"]
             while time.time() < deadline and matches < cap:
@@ -88,68 +107,73 @@ def run_bot(job, serial):
                 if time.time() < deadline:
                     time.sleep(CFG["session"]["between_matches_s"][0])
 
-            try:
-                leave_guild(dev)
-            except FlowError:
-                pass
+            if not NO_LEAVE:
+                try:
+                    leave_guild(dev)
+                except FlowError as e:
+                    log(job["id"], f"{serial}: leave error {e}")
         except FlowError as e:
             outcome = str(e)
+            log(job["id"], f"{serial}: FAILED {e}")
+        except Exception as e:
+            outcome = f"crash {type(e).__name__}: {e}"
+            log(job["id"], f"{serial}: CRASH {outcome}")
         return {"serial": serial, "matches": matches, "outcome": outcome}
 
 
-def post_result(job_id, serial):
+def post_result(job, serial):
     try:
-        r = run_bot({"id": job_id, "hours": HOURS[job_id],
-                     "guild": GUILDS[job_id]}, serial)
+        r = run_bot(job, serial)
     except Exception as e:
         r = {"serial": serial, "matches": 0, "outcome": f"crash {e}"}
-    try:
-        requests.post(f"{CTRL}/api/job/{job_id}/result", headers=HDR,
-                      json=r, timeout=20)
-    except requests.RequestException:
-        pass
-
-
-HOURS, GUILDS = {}, {}
+    for _ in range(3):
+        try:
+            requests.post(f"{CTRL}/api/job/{job['id']}/result", headers=HDR,
+                          json=r, timeout=20)
+            return
+        except requests.RequestException:
+            time.sleep(3)
 
 
 def main():
     threading.Thread(target=heartbeat, daemon=True).start()
     threading.Thread(target=warmer, daemon=True).start()
-    print(f"runner up: {len(SERIALS)} devices", flush=True)
+    print(f"runner up: {len(SERIALS)} devices, min level {MIN_LEVEL}", flush=True)
 
-    while True:
+    while RUNNING.is_set():
         try:
             job = requests.get(f"{CTRL}/api/next-job", headers=HDR,
                                timeout=20).json().get("job")
-        except requests.RequestException:
+        except (requests.RequestException, ValueError):
             time.sleep(15)
             continue
         if not job:
             time.sleep(30)
             continue
 
-        HOURS[job["id"]] = job["hours"]
-        GUILDS[job["id"]] = job["guild"]
+        log(job["id"], f"claimed: guild {job['guild']} {job['hours']}h {job['bots']} bots")
 
+        give_up = time.time() + 900
         targets = free_devices()[: job["bots"]]
-        if not targets:
+        while not targets and time.time() < give_up:
             log(job["id"], "no free devices, waiting")
-            time.sleep(30)
+            time.sleep(20)
+            targets = free_devices()[: job["bots"]]
+        if not targets:
+            log(job["id"], "gave up waiting for a free device")
             continue
 
         log(job["id"], f"starting {len(targets)} bots for {job['hours']}h")
-        threads = []
-        for s in targets:
-            t = threading.Thread(target=post_result, args=(job["id"], s))
+        threads = [threading.Thread(target=post_result, args=(job, s)) for s in targets]
+        for t in threads:
             t.start()
-            threads.append(t)
         for t in threads:
             t.join()
         log(job["id"], "job finished")
-        HOURS.pop(job["id"], None)
-        GUILDS.pop(job["id"], None)
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        RUNNING.clear()
