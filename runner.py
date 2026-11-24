@@ -15,7 +15,7 @@ TOK = os.environ["RUNNER_TOKEN"]
 HDR = {"X-Runner-Token": TOK}
 SERIALS = [s.strip() for s in os.environ["ADB_SERIALS"].split(",") if s.strip()]
 REGION = os.environ.get("FF_REGION", "IND")
-MIN_LEVEL = int(os.environ.get("BOT_MIN_LEVEL", 8))
+MIN_LEVEL = int(os.environ.get("BOT_MIN_LEVEL", 2))
 
 CFG = yaml.safe_load(open(os.path.join(ROOT, "config.yaml")))
 CFG["guild"]["require_level"] = MIN_LEVEL
@@ -43,7 +43,7 @@ def heartbeat():
                                 "free": len(free_devices())}, timeout=10)
         except requests.RequestException:
             pass
-        time.sleep(60)
+        time.sleep(120)
 
 
 def warmer():
@@ -66,12 +66,15 @@ def run_bot(job, serial):
             dev.launch()
             ensure_account(dev, ApiProvider(), REGION, MIN_LEVEL, CFG,
                            lambda m: log(job["id"], f"{serial}: {m}"))
+
             state = join_guild(dev, job["guild"], CFG)
             if state == "pending":
                 log(job["id"], f"{serial}: pending approval")
                 state = wait_approved(dev, CFG, job["guild"])
             if state not in ("joined", "already"):
-                raise FlowError("join failed")
+                raise FlowError("join failed — check guild min level is "
+                                f"{MIN_LEVEL} or lower, join is open, "
+                                "and slots are free")
 
             cap = CFG["session"]["max_matches_per_bot"]
             while time.time() < deadline and matches < cap:
@@ -84,6 +87,7 @@ def run_bot(job, serial):
                     time.sleep(5)
                 if time.time() < deadline:
                     time.sleep(CFG["session"]["between_matches_s"][0])
+
             try:
                 leave_guild(dev)
             except FlowError:
@@ -95,7 +99,8 @@ def run_bot(job, serial):
 
 def post_result(job_id, serial):
     try:
-        r = run_bot(job_id and job_id, serial)
+        r = run_bot({"id": job_id, "hours": HOURS[job_id],
+                     "guild": GUILDS[job_id]}, serial)
     except Exception as e:
         r = {"serial": serial, "matches": 0, "outcome": f"crash {e}"}
     try:
@@ -103,6 +108,9 @@ def post_result(job_id, serial):
                       json=r, timeout=20)
     except requests.RequestException:
         pass
+
+
+HOURS, GUILDS = {}, {}
 
 
 def main():
@@ -118,8 +126,11 @@ def main():
             time.sleep(15)
             continue
         if not job:
-            time.sleep(10)
+            time.sleep(30)
             continue
+
+        HOURS[job["id"]] = job["hours"]
+        GUILDS[job["id"]] = job["guild"]
 
         targets = free_devices()[: job["bots"]]
         if not targets:
@@ -136,6 +147,8 @@ def main():
         for t in threads:
             t.join()
         log(job["id"], "job finished")
+        HOURS.pop(job["id"], None)
+        GUILDS.pop(job["id"], None)
 
 
 if __name__ == "__main__":
