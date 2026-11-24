@@ -4,19 +4,35 @@ import pytesseract
 
 TPL_DIR = os.path.join(os.path.dirname(__file__), "templates")
 _cache = {}
+_missing = set()
 
 
 def _load(name):
+    if name in _missing:
+        return None
     if name not in _cache:
         path = os.path.join(TPL_DIR, name + ".png")
         if not os.path.exists(path):
-            raise FileNotFoundError(f"missing template {path}")
-        _cache[name] = cv2.imread(path, cv2.IMREAD_COLOR)
+            _missing.add(name)
+            print(f"[vision] MISSING TEMPLATE {name}", flush=True)
+            return None
+        tpl = cv2.imread(path, cv2.IMREAD_COLOR)
+        if tpl is None:
+            _missing.add(name)
+            print(f"[vision] UNREADABLE TEMPLATE {name}", flush=True)
+            return None
+        _cache[name] = tpl
     return _cache[name]
+
+
+def missing():
+    return sorted(_missing)
 
 
 def find(screen, name, conf=0.82, region=None):
     tpl = _load(name)
+    if tpl is None:
+        return None
     h, w = screen.shape[:2]
     if region:
         x1, y1, x2, y2 = (int(region[0] * w), int(region[1] * h),
