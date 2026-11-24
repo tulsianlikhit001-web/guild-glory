@@ -5,7 +5,15 @@ import pytesseract
 TPL_DIR = os.path.join(os.path.dirname(__file__), "templates")
 _cache = {}
 _missing = set()
-
+REQUIRED = [
+    "btn_login_guest", "btn_guest_recover", "field_guest_uid", "btn_guest_next",
+    "field_guest_pw", "btn_guest_confirm", "hud_lobby_ready",
+    "badge_guild_member", "btn_guild", "btn_guild_search", "field_guild_id",
+    "btn_search_confirm", "btn_guild_join", "btn_guild_apply", "btn_confirm",
+    "popup_guild_full", "btn_guild_members", "row_self_member", "btn_leave_guild",
+    "btn_mode_br", "btn_start_match", "hud_land_button", "btn_result_ok",
+    "hud_spectate", "hud_dead", "warn_outside_zone", "warn_enemy_near",
+]
 
 def _load(name):
     if name in _missing:
