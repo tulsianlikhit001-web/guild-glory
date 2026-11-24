@@ -1,0 +1,23 @@
+services:
+  - type: web
+    name: ffguildbot-control
+    runtime: docker
+    plan: free
+    region: singapore
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: ADMIN_TOKEN
+        sync: false
+      - key: RUNNER_TOKEN
+        sync: false
+      - key: UPSTASH_REDIS_REST_URL
+        sync: false
+      - key: UPSTASH_REDIS_REST_TOKEN
+        sync: false
+      - key: DEFAULT_HOURS
+        value: "6"
+      - key: MAX_BOTS_PER_JOB
+        value: "4"
+      - key: TZ
+        value: "Asia/Kolkata"
