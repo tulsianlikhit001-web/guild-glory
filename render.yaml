@@ -19,5 +19,7 @@ services:
         value: "6"
       - key: MAX_BOTS_PER_JOB
         value: "4"
+      - key: BOT_MIN_LEVEL
+        value: "2"
       - key: TZ
         value: "Asia/Kolkata"
