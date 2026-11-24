@@ -8,6 +8,7 @@ ADMIN = os.environ["ADMIN_TOKEN"]
 RUNNER = os.environ["RUNNER_TOKEN"]
 DEFAULT_HOURS = int(os.environ.get("DEFAULT_HOURS", 6))
 MAX_BOTS = int(os.environ.get("MAX_BOTS_PER_JOB", 4))
+MIN_LEVEL = os.environ.get("BOT_MIN_LEVEL", "2")
 Q = "queue:jobs"
 
 PAGE = """
@@ -19,7 +20,8 @@ PAGE = """
   <label>Bots <input name="bots" type="number" min="1" max="{mb}" value="{mb}"></label><br><br>
   <button>Launch</button>
 </form>
-<p><b>Guild must be open-join, min level {lv} or lower, with free slots.</b></p>
+<p><b>Before launching, set the guild to open-join, min level {lv} or lower,
+and make sure there are at least {mb} free slots.</b></p>
 <p>Runner heartbeat: {hb} &nbsp;|&nbsp; queued: {q}</p>
 """
 
@@ -38,8 +40,7 @@ def health():
 def index():
     hb = store.get_json("runner:heartbeat") or {}
     seen = f"{int(time.time() - hb['t'])}s ago" if hb.get("t") else "never"
-    return PAGE.format(dh=DEFAULT_HOURS, mb=MAX_BOTS,
-                       lv=os.environ.get("BOT_MIN_LEVEL", "8"),
+    return PAGE.format(dh=DEFAULT_HOURS, mb=MAX_BOTS, lv=MIN_LEVEL,
                        hb=seen, q=store.llen(Q))
 
 
