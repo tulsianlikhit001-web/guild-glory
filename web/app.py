@@ -33,15 +33,37 @@ def _runner(tok):
 
 @app.get("/health")
 def health():
-    return {"ok": True, "queued": store.llen(Q), "t": int(time.time())}
+    try:
+        return {"ok": True, "queued": store.llen(Q)}
+    except Exception as e:
+        return {"ok": False, "error": str(e)[:140]}
+
+
+@app.get("/diag")
+def diag():
+    try:
+        return {"ok": True, **store.diagnose()}
+    except Exception as e:
+        return {
+            "ok": False,
+            "error": f"{type(e).__name__}: {e}"[:200],
+            "url": os.environ.get("UPSTASH_REDIS_REST_URL", "")[:60],
+            "token_len": len(os.environ.get("UPSTASH_REDIS_REST_TOKEN", "")),
+        }
 
 
 @app.get("/", response_class=HTMLResponse)
 def index():
-    hb = store.get_json("runner:heartbeat") or {}
-    seen = f"{int(time.time() - hb['t'])}s ago" if hb.get("t") else "never"
-    return PAGE.format(dh=DEFAULT_HOURS, mb=MAX_BOTS, lv=MIN_LEVEL,
-                       hb=seen, q=store.llen(Q))
+    try:
+        hb = store.get_json("runner:heartbeat") or {}
+        q = store.llen(Q)
+        seen = f"{int(time.time() - hb['t'])}s ago" if hb.get("t") else "never"
+        return PAGE.format(dh=DEFAULT_HOURS, mb=MAX_BOTS, lv=MIN_LEVEL,
+                           hb=seen, q=q)
+    except Exception as e:
+        return (f"<h3>Form loaded, storage broken</h3>"
+                f"<pre>{type(e).__name__}: {e}</pre>"
+                f"<p><a href='/diag'>open /diag</a></p>")
 
 
 @app.post("/launch", response_class=HTMLResponse)
