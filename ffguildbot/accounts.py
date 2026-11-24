@@ -1,4 +1,4 @@
-import os, sys, json, time, uuid
+import os, sys, json, time, uuid, threading
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -14,6 +14,7 @@ STATE.mkdir(parents=True, exist_ok=True)
 LEDGER = STATE / "accounts.jsonl"
 POOL = STATE / "pool.jsonl"
 
+_POOL_LOCK = threading.Lock()
 WARM_RANKS = ("rank_gold", "rank_platinum", "rank_diamond",
               "rank_heroic", "rank_grandmaster")
 
@@ -48,22 +49,38 @@ def pool_count():
 
 
 def pool_take():
-    if not POOL.exists():
-        return None
-    lines = [l for l in POOL.read_text().splitlines() if l.strip()]
-    if not lines:
-        return None
-    POOL.write_text("\n".join(lines[1:]) + ("\n" if len(lines) > 1 else ""))
+    with _POOL_LOCK:
+        if not POOL.exists():
+            return None
+        lines = [l for l in POOL.read_text().splitlines() if l.strip()]
+        if not lines:
+            return None
+        tmp = POOL.with_suffix(".tmp")
+        tmp.write_text("\n".join(lines[1:]) + ("\n" if len(lines) > 1 else ""))
+        tmp.replace(POOL)
     try:
         return json.loads(lines[0])
     except json.JSONDecodeError:
         return pool_take()
 
 
+def _generate(region, tries=3):
+    for i in range(tries):
+        try:
+            raw = ffapi.api_generate(region=region)
+        except Exception as e:
+            print(f"generator raised {type(e).__name__}: {e}", flush=True)
+            raw = None
+        if raw and raw.get("uid") and raw.get("password"):
+            return raw
+        time.sleep(1.5 * (i + 1))
+    return None
+
+
 def pool_fill(region, target, batch=10):
     added = 0
     while pool_count() < target and added < batch:
-        raw = ffapi.api_generate(region=region)
+        raw = _generate(region, tries=1)
         if not raw:
             time.sleep(3)
             continue
@@ -78,9 +95,10 @@ class ApiProvider:
     def create(self, dev, region="IND"):
         raw = pool_take()
         if raw is None:
-            raw = ffapi.api_generate(region=region)
+            raw = _generate(region)
         if not raw:
-            raise FlowError("generator returned no account")
+            raise FlowError("generator returned no account — check ffapi.py and "
+                            "its network/captcha path")
         acct = Account(dev.serial, raw["uid"], raw["password"],
                        raw.get("account_id", ""), region)
         _record(acct, "acquired")
@@ -126,7 +144,7 @@ def ensure_account(dev, provider, region, min_level, cfg, log=print):
     acct = provider.create(dev, region)
     if not provider.login(dev, acct):
         _record(acct, "login-failed")
-        raise FlowError("login failed — guest login templates or account bad")
+        raise FlowError("login failed — guest login templates wrong or account bad")
 
     acct.level = provider.validate(dev) or 0
     log(f"account {acct.account_id or acct.uid} level {acct.level}")
