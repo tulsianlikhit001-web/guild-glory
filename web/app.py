@@ -34,7 +34,7 @@ padding:12px;color:#fff;font:inherit;font-weight:600;cursor:pointer}
 button:hover{background:#2f6ae6}
 .note{font-size:13px;color:#8b93a7;margin:20px 0 0;padding:14px 16px;
 background:#141924;border:1px solid #232a3a;border-left:3px solid #f5a524;border-radius:9px}
-.bar{display:flex;gap:20px;margin-top:16px;font-size:13px;color:#8b93a7}
+.bar{display:flex;gap:20px;margin-top:16px;font-size:13px;color:#8b93a7;flex-wrap:wrap}
 .pill{display:inline-flex;align-items:center;gap:6px}
 .dot{width:7px;height:7px;border-radius:50%;background:#3fb950}
 .dot.off{background:#6b7280}
@@ -42,7 +42,7 @@ background:#141924;border:1px solid #232a3a;border-left:3px solid #f5a524;border
 pre{background:#0b0e14;border:1px solid #232a3a;border-radius:10px;padding:14px;
 overflow-x:auto;font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;color:#c8cede}
 ul{list-style:none;padding:0;margin:0;font:12px/1.7 ui-monospace,monospace;color:#aeb6c7}
-ul li{padding:3px 0;border-bottom:1px solid #1a2030}
+ul li{padding:3px 0;border-bottom:1px solid #1a2030;word-break:break-word}
 .err{color:#ff7b72}
 h2{font-size:13px;text-transform:uppercase;letter-spacing:.08em;color:#8b93a7;
 margin:26px 0 8px}
@@ -77,6 +77,12 @@ def health():
                             content={"ok": False, "error": str(e)[:140]})
 
 
+@app.get("/api/ping")
+def api_ping(x_runner_token: str = Header(...)):
+    _runner(x_runner_token)
+    return {"ok": True, "queued": store.llen(Q)}
+
+
 @app.get("/diag")
 def diag():
     try:
@@ -97,17 +103,17 @@ def index():
         q = store.llen(Q)
         age = int(time.time() - hb["t"]) if hb.get("t") else None
         if age is None:
-            beat = '<span class="pill"><span class="dot off"></span>never seen</span>'
+            beat = '<span class="pill"><span class="dot off"></span>runner never seen</span>'
         elif age < 180:
             beat = f'<span class="pill"><span class="dot"></span>runner {age}s ago</span>'
         else:
-            beat = f'<span class="pill"><span class="dot warn"></span>stale {age // 60}m</span>'
+            beat = f'<span class="pill"><span class="dot warn"></span>runner stale {age // 60}m</span>'
         devs = ""
         if hb.get("devices") is not None:
-            devs = f' &nbsp;·&nbsp; {hb.get("free", 0)}/{hb["devices"]} devices free'
+            devs = f'<span>{hb.get("free", 0)}/{hb["devices"]} devices free</span>'
         tpl = ""
         if hb.get("missing_templates"):
-            tpl = f' &nbsp;·&nbsp; {hb["missing_templates"]} templates missing'
+            tpl = f'<span>{hb["missing_templates"]} templates missing</span>'
         body = f"""
 <h1>FF Guild Glory Bot</h1>
 <p class="sub">Queue a guild join, the phone box does the rest.</p>
@@ -172,12 +178,21 @@ def job_page(job_id: str):
     if not j:
         raise HTTPException(404, "no such job")
     live = j["status"] in ("queued", "running")
+    waited = int(time.time() - j["created"])
+    banner = ""
+    if j["status"] == "queued" and waited > 60:
+        banner = ('<p class="note"><b>Not claimed yet</b> — the runner has not '
+                  'polled this job. Check that runner.py is running and that '
+                  'its RUNNER_TOKEN matches the one on Render.</p>')
+    elif j["status"] == "queued":
+        banner = '<p class="note">Waiting for the runner to claim this job…</p>'
     rows = "".join(f"<li>{r}</li>" for r in j.get("log", [])[-40:]) or "<li>—</li>"
     res = "".join(f"<li>{r}</li>" for r in j.get("results", [])) or "<li>—</li>"
     body = f"""
 <h1>Job {job_id}</h1>
 <p class="meta">guild {j['guild']} &nbsp;·&nbsp; {j['hours']}h &nbsp;·&nbsp;
-{j['bots']} bots &nbsp;·&nbsp; <b>{j['status']}</b></p>
+{j['bots']} bots &nbsp;·&nbsp; <b>{j['status']}</b> &nbsp;·&nbsp; {waited}s old</p>
+{banner}
 <h2>Log</h2><ul>{rows}</ul>
 <h2>Results</h2><ul>{res}</ul>
 <p class="meta" style="margin-top:24px"><a href="/">new job</a></p>"""
