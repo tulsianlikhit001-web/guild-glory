@@ -1,0 +1,9 @@
+requests
+pyyaml
+opencv-python-headless
+numpy==1.26.4
+pytesseract
+psutil
+pycryptodome
+colorama
+urllib3
