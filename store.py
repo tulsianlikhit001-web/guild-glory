@@ -1,21 +1,27 @@
 import os, json, urllib.request, urllib.error
 
-_URL = os.environ["UPSTASH_REDIS_REST_URL"].strip().rstrip("/")
-_TOK = os.environ["UPSTASH_REDIS_REST_TOKEN"].strip()
-
-if not _URL.startswith(("http://", "https://")):
-    raise RuntimeError(
-        f"UPSTASH_REDIS_REST_URL must start with https:// — got {_URL[:50]!r}")
-
 
 class RedisError(RuntimeError):
     pass
 
 
+def _cfg():
+    url = os.environ.get("UPSTASH_REDIS_REST_URL", "").strip().rstrip("/")
+    tok = os.environ.get("UPSTASH_REDIS_REST_TOKEN", "").strip()
+    if not url:
+        raise RedisError("UPSTASH_REDIS_REST_URL is not set")
+    if not tok:
+        raise RedisError("UPSTASH_REDIS_REST_TOKEN is not set")
+    if not url.startswith(("http://", "https://")):
+        raise RedisError(f"UPSTASH_REDIS_REST_URL must start with https:// — got {url[:50]!r}")
+    return url, tok
+
+
 def _cmd(*args):
+    url, tok = _cfg()
     req = urllib.request.Request(
-        _URL, data=json.dumps([str(a) for a in args]).encode(),
-        headers={"Authorization": f"Bearer {_TOK}",
+        url, data=json.dumps([str(a) for a in args]).encode(),
+        headers={"Authorization": f"Bearer {tok}",
                  "Content-Type": "application/json"}, method="POST")
     try:
         with urllib.request.urlopen(req, timeout=15) as r:
@@ -28,39 +34,3 @@ def _cmd(*args):
     if isinstance(body, dict) and body.get("error"):
         raise RedisError(body["error"])
     return body.get("result")
-
-
-def set_json(key, obj, ttl=None):
-    if ttl:
-        _cmd("SET", key, json.dumps(obj), "EX", ttl)
-    else:
-        _cmd("SET", key, json.dumps(obj))
-
-
-def get_json(key):
-    raw = _cmd("GET", key)
-    return json.loads(raw) if raw else None
-
-
-def push(key, val):
-    _cmd("RPUSH", key, json.dumps(val))
-
-
-def pop(key):
-    raw = _cmd("LPOP", key)
-    return json.loads(raw) if raw else None
-
-
-def llen(key):
-    return int(_cmd("LLEN", key) or 0)
-
-
-def diagnose():
-    return {
-        "url_scheme": _URL.split("://")[0],
-        "url_host": _URL.split("//", 1)[-1],
-        "token_len": len(_TOK),
-        "token_prefix": _TOK[:2],
-        "ping": _cmd("PING"),
-        "keys": _cmd("DBSIZE"),
-    }
