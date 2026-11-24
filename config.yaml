@@ -1,0 +1,22 @@
+game:
+  package: com.dts.freefireth
+  launch_wait_s: 35
+
+guild:
+  join_timeout_s: 180
+  approve_timeout_s: 900
+  require_level: 8
+
+session:
+  match_timeout_s: 900
+  between_matches_s: [20, 90]
+  max_matches_per_bot: 40
+
+accounts:
+  warmup_max_matches: 25
+  pool_low_water: 10
+  pool_target: 25
+
+vision:
+  conf: 0.82
+  enemy_conf: 0.70
