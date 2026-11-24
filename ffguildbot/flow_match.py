@@ -4,7 +4,8 @@ from .vision import tap_if, wait_for, find
 
 
 def run_match(dev, cfg):
-    if not tap_if(dev, "btn_mode_br", timeout=20):
+    dev.ensure_foreground()
+    if not tap_if(dev, "btn_mode_br", timeout=25):
         raise FlowError("BR button not found")
     time.sleep(random.uniform(0.8, 1.6))
     if not tap_if(dev, "btn_start_match", timeout=20):
@@ -17,7 +18,11 @@ def run_match(dev, cfg):
 
     deadline = time.time() + cfg["session"]["match_timeout_s"]
     while time.time() < deadline:
-        screen = dev.shot()
+        try:
+            screen = dev.shot()
+        except FlowError:
+            time.sleep(1.5)
+            continue
         if find(screen, "btn_result_ok", conf=0.8):
             tap_if(dev, "btn_result_ok", timeout=6)
             return "finished"
