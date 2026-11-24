@@ -5,16 +5,37 @@ import requests, yaml
 ROOT = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, ROOT)
 
+
+def _load_env():
+    p = os.path.join(ROOT, "runner.env")
+    if not os.path.exists(p):
+        return
+    for line in open(p):
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        k, v = line.split("=", 1)
+        os.environ.setdefault(k.strip(), v.strip().strip('"').strip("'"))
+
+
+def _need(name):
+    if not os.environ.get(name):
+        sys.exit(f"missing env var {name} — set it in runner.env")
+    return os.environ[name]
+
+
+_load_env()
+
 from ffguildbot.accounts import ApiProvider, ensure_account, pool_count, pool_fill
 from ffguildbot.device import Device, FlowError
 from ffguildbot.flow_join import join_guild, wait_approved, leave_guild
 from ffguildbot.flow_match import run_match
 from ffguildbot import vision
 
-CTRL = os.environ["CONTROL_URL"].rstrip("/")
-TOK = os.environ["RUNNER_TOKEN"]
+CTRL = _need("CONTROL_URL").rstrip("/")
+TOK = _need("RUNNER_TOKEN")
+SERIALS = [s.strip() for s in _need("ADB_SERIALS").split(",") if s.strip()]
 HDR = {"X-Runner-Token": TOK}
-SERIALS = [s.strip() for s in os.environ["ADB_SERIALS"].split(",") if s.strip()]
 REGION = os.environ.get("FF_REGION", "IND")
 MIN_LEVEL = int(os.environ.get("BOT_MIN_LEVEL", 2))
 NO_LEAVE = os.environ.get("FF_NO_LEAVE") == "1"
@@ -78,7 +99,7 @@ def preflight():
         attached = [l.split("\t")[0] for l in out.stdout.splitlines()[1:]
                     if "\tdevice" in l]
         if not attached:
-            fatal.append("adb sees no attached devices")
+            fatal.append("adb sees no attached devices (authorize USB debugging)")
         for s in SERIALS:
             if s not in attached:
                 warn.append(f"serial {s} not attached right now")
