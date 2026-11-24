@@ -92,3 +92,6 @@ def read_int(screen, region, whitelist="0123456789"):
         crop, config=f"--psm 7 -c tessedit_char_whitelist={whitelist}")
     digits = "".join(c for c in txt if c.isdigit())
     return int(digits) if digits else None
+def missing_required():
+    return [n for n in REQUIRED
+            if not os.path.exists(os.path.join(TPL_DIR, n + ".png"))]
