@@ -13,7 +13,8 @@ def _cfg():
     if not tok:
         raise RedisError("UPSTASH_REDIS_REST_TOKEN is not set")
     if not url.startswith(("http://", "https://")):
-        raise RedisError(f"UPSTASH_REDIS_REST_URL must start with https:// — got {url[:50]!r}")
+        raise RedisError(
+            f"UPSTASH_REDIS_REST_URL must start with https:// — got {url[:50]!r}")
     return url, tok
 
 
@@ -34,3 +35,43 @@ def _cmd(*args):
     if isinstance(body, dict) and body.get("error"):
         raise RedisError(body["error"])
     return body.get("result")
+
+
+def set_json(key, obj, ttl=None):
+    if ttl:
+        _cmd("SET", key, json.dumps(obj), "EX", ttl)
+    else:
+        _cmd("SET", key, json.dumps(obj))
+
+
+def get_json(key):
+    raw = _cmd("GET", key)
+    return json.loads(raw) if raw else None
+
+
+def push(key, val):
+    _cmd("RPUSH", key, json.dumps(val))
+
+
+def pop(key):
+    raw = _cmd("LPOP", key)
+    return json.loads(raw) if raw else None
+
+
+def llen(key):
+    return int(_cmd("LLEN", key) or 0)
+
+
+def diagnose():
+    url, tok = _cfg()
+    return {
+        "url_scheme": url.split("://")[0],
+        "url_host": url.split("//", 1)[-1],
+        "token_len": len(tok),
+        "token_prefix": tok[:2],
+        "ping": _cmd("PING"),
+        "keys": _cmd("DBSIZE"),
+        "functions": sorted(
+            n for n, v in globals().items()
+            if callable(v) and not n.startswith("_") and n != "RedisError"),
+    }
