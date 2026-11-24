@@ -1,9 +1,10 @@
 import os, time, uuid
 from fastapi import FastAPI, Form, Header, HTTPException, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 import store
 
 app = FastAPI(title="FF Guild Glory Bot")
+
 ADMIN = os.environ["ADMIN_TOKEN"]
 RUNNER = os.environ["RUNNER_TOKEN"]
 DEFAULT_HOURS = int(os.environ.get("DEFAULT_HOURS", 6))
@@ -15,7 +16,7 @@ PAGE = """
 <h2>FF Guild Glory Bot</h2>
 <form method="post" action="/launch">
   <input name="admin" type="password" placeholder="admin token" required><br><br>
-  <label>Guild ID <input name="guild_id" required pattern="[0-9]{6,12}"></label><br>
+  <label>Guild ID <input name="guild_id" required pattern="[0-9]{{6,12}}"></label><br>
   <label>Hours <input name="hours" type="number" min="1" max="24" value="{dh}"></label><br>
   <label>Bots <input name="bots" type="number" min="1" max="{mb}" value="{mb}"></label><br><br>
   <button>Launch</button>
@@ -36,7 +37,8 @@ def health():
     try:
         return {"ok": True, "queued": store.llen(Q)}
     except Exception as e:
-        return {"ok": False, "error": str(e)[:140]}
+        return JSONResponse(status_code=503,
+                            content={"ok": False, "error": str(e)[:140]})
 
 
 @app.get("/diag")
@@ -44,12 +46,12 @@ def diag():
     try:
         return {"ok": True, **store.diagnose()}
     except Exception as e:
-        return {
+        return JSONResponse(status_code=503, content={
             "ok": False,
             "error": f"{type(e).__name__}: {e}"[:200],
             "url": os.environ.get("UPSTASH_REDIS_REST_URL", "")[:60],
             "token_len": len(os.environ.get("UPSTASH_REDIS_REST_TOKEN", "")),
-        }
+        })
 
 
 @app.get("/", response_class=HTMLResponse)
