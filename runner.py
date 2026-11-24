@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import os, sys, time, threading
+import os, sys, time, threading, subprocess
 import requests, yaml
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
@@ -18,6 +18,7 @@ SERIALS = [s.strip() for s in os.environ["ADB_SERIALS"].split(",") if s.strip()]
 REGION = os.environ.get("FF_REGION", "IND")
 MIN_LEVEL = int(os.environ.get("BOT_MIN_LEVEL", 2))
 NO_LEAVE = os.environ.get("FF_NO_LEAVE") == "1"
+FORCE = os.environ.get("FF_FORCE") == "1"
 
 CFG = yaml.safe_load(open(os.path.join(ROOT, "config.yaml")))
 CFG["guild"]["require_level"] = MIN_LEVEL
@@ -41,13 +42,78 @@ def free_devices():
     return [s for s in SERIALS if not LOCKS[s].locked()]
 
 
+def preflight():
+    fatal, warn = [], []
+
+    try:
+        import ffapi  # noqa: F401
+        if not hasattr(ffapi, "create_account"):
+            fatal.append("ffapi imported but has no create_account()")
+        if not hasattr(ffapi, "api_generate"):
+            fatal.append("ffapi not patched — run: python patch_ffapi.py")
+    except Exception as e:
+        fatal.append(f"cannot import ffapi: {type(e).__name__}: {e} "
+                     "— commit ffapi.py to repo root, then run patch_ffapi.py")
+
+    try:
+        r = requests.get(f"{CTRL}/health", timeout=15)
+        if r.status_code != 200:
+            fatal.append(f"control plane /health -> {r.status_code}")
+    except requests.RequestException as e:
+        fatal.append(f"cannot reach control plane {CTRL}: {e}")
+
+    try:
+        r = requests.get(f"{CTRL}/api/ping", headers=HDR, timeout=15)
+        if r.status_code == 401:
+            fatal.append("RUNNER_TOKEN rejected by control plane (401) — "
+                         "runner.env does not match Render")
+        elif r.status_code != 200:
+            fatal.append(f"control plane /api/ping -> {r.status_code}")
+    except requests.RequestException as e:
+        fatal.append(f"ping failed: {e}")
+
+    try:
+        out = subprocess.run(["adb", "devices"], capture_output=True,
+                             text=True, timeout=20)
+        attached = [l.split("\t")[0] for l in out.stdout.splitlines()[1:]
+                    if "\tdevice" in l]
+        if not attached:
+            fatal.append("adb sees no attached devices")
+        for s in SERIALS:
+            if s not in attached:
+                warn.append(f"serial {s} not attached right now")
+    except Exception as e:
+        fatal.append(f"adb check failed: {e}")
+
+    missing = vision.missing_required()
+    if missing:
+        msg = (f"{len(missing)} templates missing: {', '.join(missing[:8])}"
+               f"{' …' if len(missing) > 8 else ''} — run scripts/check_templates.py")
+        (warn if FORCE else fatal).append(msg)
+
+    for m in warn:
+        print(f"WARN  {m}", flush=True)
+    for m in fatal:
+        print(f"FATAL {m}", flush=True)
+    return not fatal
+
+
+def claim():
+    r = requests.get(f"{CTRL}/api/next-job", headers=HDR, timeout=20)
+    if r.status_code == 401:
+        raise SystemExit("RUNNER_TOKEN rejected (401) — check runner.env")
+    if r.status_code != 200:
+        raise FlowError(f"next-job -> {r.status_code} {r.text[:120]}")
+    return r.json().get("job")
+
+
 def heartbeat():
     while RUNNING.is_set():
         try:
             requests.post(f"{CTRL}/api/heartbeat", headers=HDR,
                           json={"devices": len(SERIALS),
                                 "free": len(free_devices()),
-                                "missing_templates": len(vision.missing())},
+                                "missing_templates": len(vision.missing_required())},
                           timeout=10)
         except requests.RequestException:
             pass
@@ -63,7 +129,7 @@ def warmer():
     while RUNNING.is_set():
         try:
             if pool_count() < low:
-                pool_fill(REGION, target)
+                pool_fill(REGION, target, batch=15)
                 fails = 0
         except Exception as e:
             fails += 1
@@ -136,15 +202,20 @@ def post_result(job, serial):
 
 
 def main():
+    if not preflight():
+        print("fix the FATAL lines above, then run again "
+              "(FF_FORCE=1 overrides template warnings)", flush=True)
+        sys.exit(1)
+
     threading.Thread(target=heartbeat, daemon=True).start()
     threading.Thread(target=warmer, daemon=True).start()
     print(f"runner up: {len(SERIALS)} devices, min level {MIN_LEVEL}", flush=True)
 
     while RUNNING.is_set():
         try:
-            job = requests.get(f"{CTRL}/api/next-job", headers=HDR,
-                               timeout=20).json().get("job")
-        except (requests.RequestException, ValueError):
+            job = claim()
+        except (requests.RequestException, ValueError, FlowError) as e:
+            print(f"claim error: {e}", flush=True)
             time.sleep(15)
             continue
         if not job:
